@@ -1,0 +1,33 @@
+# Windows / system
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+*.bak
+*.orig
+
+# Secrets (belt-and-suspenders — this workspace shouldn't contain them, but just in case)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+id_rsa
+id_ed25519
+secrets/
+credentials/
+
+# Scratch
+scratch/
+tmp/
+*.tmp
+*.log
