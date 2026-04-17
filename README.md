@@ -42,7 +42,8 @@
 12. [Speed & quality leaderboard](#speed--quality-leaderboard)
 13. [Hardware we've tested on](#hardware-weve-tested-on)
 14. [The 2026-04-17 black-screen — visualized](#the-2026-04-17-black-screen--visualized)
-15. [Ollama env vars cheat sheet](#ollama-env-vars-cheat-sheet)
+15. [**Growing pains log (2026-04-17)** — the artofwar CPU-offload cascade, version skew, openclaw, and how we clawed back 100x latency](#growing-pains-log-2026-04-17)
+16. [Ollama env vars cheat sheet](#ollama-env-vars-cheat-sheet)
 16. [Model tier summary](#model-tier-summary)
 17. [Primer: What is quantization?](#primer-what-is-quantization)
 18. [Primer: What is "thinking mode"?](#primer-what-is-thinking-mode)
@@ -105,6 +106,12 @@ timeline
                : We add Profile A (single-GPU-safe)
                : Upstream gridbasedotnet/CLAUDE returns 404
                : Workspace renamed NotClaw, pushed private to GitHub
+               : artofwar CPU-offload cascade discovered — ccode "hi" hanging 45s+
+               : Systemd override NUM_PARALLEL=1 + KV_CACHE_TYPE=q8_0 applied
+               : Modelfile patched with PARAMETER num_ctx 32768 + num_gpu 65
+               : openclaw service masked (standalone, pre-Ollama-integration)
+               : Ollama 0.18.0 upgraded to 0.21.0 → MULTIUSER_CACHE enabled
+               : Warm response down to ~0.33s, 65/65 layers on GPU
 ```
 
 ---
@@ -384,8 +391,9 @@ Total: 35.6 / 40.0 GB                                89%
 ```
 
 - 5× NVIDIA RTX 3070, 40 GB VRAM total, no display attached.
-- **Profile B** systemd config (see LOCAL-CLAUDE-SETUP.md).
-- Runs `qwen2.5-coder:32b` at ~15 tok/s spread across all 5 cards.
+- **Profile B** systemd config (see LOCAL-CLAUDE-SETUP.md), plus overrides applied 2026-04-17 after the CPU-offload incident (see [Growing Pains Log](#growing-pains-log-2026-04-17)).
+- Runs `qwen2.5-coder:32b` — **65/65 layers on GPU**, 30 GB VRAM across 5 cards, cold load ~100s, **warm response ~0.33s for small prompts**, ~14 tok/s generation.
+- `OLLAMA_MULTIUSER_CACHE=true` (since upgrade to Ollama 0.21.0) — prompt-prefix caching drastically cuts claw's tool-schema re-eval cost.
 
 ### Buddy's PC — single RTX 3070 Ti (8 GB, display-driving)
 
@@ -426,6 +434,173 @@ Full post-mortem in [LOCAL-CLAUDE-SETUP.md](LOCAL-CLAUDE-SETUP.md#case-study-the
 
 ---
 
+## Growing pains log (2026-04-17)
+
+A full day of compounding weirdness on the artofwar rig. Each of these is a scar that's now a lesson, and together they produced the current working config. Timeline is chronological. If you hit similar symptoms on a multi-GPU box, work through this in order.
+
+### Incident 1 — `ccode "hi"` hangs 45+ seconds
+
+**Symptom:** user types `hi` in claw, no visible response, terminal appears frozen. Ctrl+C does nothing.
+
+**First hypothesis (wrong):** cold model load across 5 GPUs — normal latency.
+
+**Real cause:** the 32b model was running 100% on CPU. Zero layers on any GPU. Inference at ~0.5 tok/s.
+
+**How we found it:**
+- `nvidia-smi` — all GPUs at 0% utilization, 1.4 GB on GPU 0, 203 MB each on others (just CUDA runtime, nothing else).
+- `curl /api/ps` — reported `size_vram: 68 GB` which is *more than total available VRAM* (5 × 8 = 40 GB). Red flag: Ollama was reporting the model as "in VRAM" while `nvidia-smi` said it wasn't.
+- `ps` — one Ollama process holding **53 GB of system RAM** (81.8% of total RAM).
+- Cross-referencing the two: the "in VRAM" number included CPU-offloaded weights because Ollama classifies anything the model backend touches as "VRAM" regardless of physical location. Classic instrumentation lie.
+
+**Root cause in the ollama logs:**
+```
+load_tensors: offloading 0 repeating layers to GPU
+load_tensors: offloaded 0/65 layers to GPU
+load_tensors:    CUDA_Host model buffer size = 18508.35 MiB   ← CPU-pinned host memory
+compute graph device=CUDA0 size="12.8 GiB"  (per GPU)
+total memory size="113.9 GiB"
+```
+
+The server was requesting **12.8 GB of compute-graph-plus-KV per GPU** (each card has 8 GB). Over budget → fall back to CPU for everything. The demand came from `OLLAMA_NUM_PARALLEL=4` × `num_ctx` defaulting to 131072 (128k). Four parallel KV-cache slots at 128k each on a 32b model blew the per-GPU ceiling.
+
+### Lesson 1 — Ollama's allocator is conservative, not optimistic
+
+Ollama **does not** try to fit as much model as possible onto GPU and fall back layer-by-layer. It **estimates** total memory demand *before* loading. If the estimate exceeds any single GPU's available VRAM, it refuses to spread and dumps everything to CPU instead.
+
+Mental model shift: **"plan and reject"** instead of **"try and fallback"**. The tuning knobs that matter are the ones that shrink the *pre-load estimate*:
+
+- `OLLAMA_NUM_PARALLEL` (linearly scales KV demand)
+- `OLLAMA_KV_CACHE_TYPE` (`q8_0` halves KV size)
+- `num_ctx` (Modelfile `PARAMETER` — linearly scales KV)
+- `num_gpu` (Modelfile `PARAMETER` — force full offload when allocator is wrong)
+
+### Incident 2 — `OLLAMA_CONTEXT_LENGTH` silently ignored
+
+**Symptom:** set `Environment="OLLAMA_CONTEXT_LENGTH=32768"` in systemd override, restarted, confirmed env was live in the service. But every cold load still tried to allocate for 131k context.
+
+**Root cause:** artofwar was running **Ollama 0.18.0**. `OLLAMA_CONTEXT_LENGTH` was added in **Ollama 0.20+**. On 0.18 the env var exists as a string in the process environment but nothing reads it. No error, no warning — it's just a no-op.
+
+### Lesson 2 — env-var-ignored-silently is a dangerous failure mode
+
+When you add a new config knob and "nothing happens," don't assume the knob is being honored. Check the actual effective config via whatever diagnostic the daemon exposes (for Ollama: `journalctl` shows `server config env=...` at startup). If the var name appears with a default value instead of your set value, the binary doesn't know about it. This happens during version skew — which we also hit.
+
+### Workaround — Modelfile `PARAMETER num_ctx`
+
+Because 0.18 couldn't hear the env var, we baked the context cap into the model itself:
+
+```bash
+sudo -u ollama bash -c '
+  ollama show --modelfile qwen2.5-coder:32b > /tmp/Modelfile
+  echo "PARAMETER num_ctx 32768" >> /tmp/Modelfile
+  ollama create qwen2.5-coder:32b -f /tmp/Modelfile
+'
+```
+
+Two gotchas: **(1)** must run as the `ollama` user — the service user owns `/usr/share/ollama/.ollama/models/blobs/` and regular users get "permission denied" reading those files; **(2)** this overwrites the `qwen2.5-coder:32b` tag with a new digest, so any downstream tooling pinning the old digest will need updating.
+
+### Incident 3 — 52/65 layers on GPU after the first fix
+
+After applying `NUM_PARALLEL=1` + `num_ctx=32768`, Ollama offloaded 52 of 65 layers to GPU — a huge improvement over 0/65, but 13 layers still ran on CPU. This bottlenecked generation at ~6 tok/s instead of the rig's theoretical ~15 tok/s.
+
+**Why:** Ollama's allocator still wanted headroom for activations + compute buffers and refused to use the last ~3 GB per card. Its conservatism costs performance even when the model would physically fit.
+
+### Workaround — Modelfile `PARAMETER num_gpu <total_layers>`
+
+Force all layers onto GPU regardless of allocator estimate:
+
+```bash
+echo "PARAMETER num_gpu 65" >> /tmp/Modelfile
+ollama create qwen2.5-coder:32b -f /tmp/Modelfile
+```
+
+After applying: **65/65 layers on GPU**, ~14 tok/s. Used with care — if the estimate was right and the allocator's conservatism was warranted, you'll OOM mid-inference and the CUDA context dies.
+
+### Incident 4 — "openclaw" on the box turned out to be two different things
+
+While diagnosing, `pgrep -af openclaw` showed `openclaw` + `openclaw-gateway` processes listening on 127.0.0.1:24190–24193. User confirmed they'd set up "openclaw" for something but didn't remember what.
+
+**Plot twist from the upstream research:**
+
+Ollama v0.20.3+ release notes mention `OpenClaw` — it's an **integrated messaging-channel gateway** (WhatsApp, Telegram, Discord → Ollama) invoked via `ollama launch openclaw`. The artofwar box had a **standalone, older OpenClaw install** (systemd units at `/etc/systemd/system/openclaw.service` and `openclaw-watchdog.timer`) that predated the integration. Same name, completely different codebase.
+
+### Lesson 3 — watch for name collisions in fast-moving ecosystems
+
+When a feature gets absorbed upstream under an existing third-party name, you can end up with both running on the same box — the old standalone AND the new integrated version. `systemctl mask` handled it; the mask survives reboots. But watch for this pattern: a process name you don't remember setting up might be a legacy install that upstream is now shipping as a built-in.
+
+### Incident 5 — the Ollama version-skew double-whammy
+
+After applying `Environment="OLLAMA_MULTIUSER_CACHE=true"` to the override for the first time, the env appeared set — but the Ollama log showed `OLLAMA_MULTIUSER_CACHE:false` in the server config.
+
+**Cause:** `OLLAMA_MULTIUSER_CACHE` was also added in v0.20+, same as `OLLAMA_CONTEXT_LENGTH`. On 0.18, it's another silent no-op.
+
+**The fix (forced): upgrade Ollama.**
+
+```bash
+curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+sudo bash /tmp/ollama-install.sh
+```
+
+The official install script handles URL detection, tarball format (current release ships `ollama-linux-amd64.tar.zst`, not the `.tgz` we initially guessed), and in-place binary replacement. Systemd unit + our override are preserved. Modelfile PARAMETERs survive (stored in the model registry, not the binary).
+
+### Lesson 4 — measure the effective config, not the requested config
+
+After upgrade: `journalctl -u ollama | grep MULTIUSER` now shows `OLLAMA_MULTIUSER_CACHE:true`. The env var's value *and* the daemon's knowledge of it are two different things. Grepping the server-config log line at startup is the only reliable way to know what's actually active.
+
+### Incident 6 — raw-mode TTY breaks Ctrl+C in claw
+
+**Symptom:** typing `Ctrl+C` inside a `claw` / `ccode` session during a hung prompt does nothing. The character just prints as `^C` to the terminal and claw keeps waiting.
+
+**Cause:** claw puts the TTY in **raw mode** to capture every keystroke for its input handler. In raw mode, Ctrl+C is delivered as the literal byte `0x03` to claw's stdin, *not* as a SIGINT to the process. If claw's input loop is synchronously blocked on an Ollama HTTP call, that byte sits in the buffer until claw gets around to reading it — which might be after inference finishes, 90 seconds later.
+
+### Workaround — kill from outside the TTY
+
+```
+Ctrl+Alt+F2     (switch to a clean virtual terminal — or open a new SSH session)
+pkill -INT claw; sleep 2
+pkill -TERM claw; sleep 1
+pkill -KILL claw
+Ctrl+Alt+F1     (return to the original terminal)
+reset           (restore cooked-mode TTY — corrupted shell back to sane)
+```
+
+Newer agent harnesses (aider, Claude Code itself) run inference on a background task and poll stdin on the main thread precisely to avoid this. claw's simpler threading model is the tradeoff.
+
+### Net result — measured before and after
+
+| Metric | Before (0.18, bad defaults) | After (0.21 + override + Modelfile + upgrade) |
+|---|---|---|
+| Layers on GPU | **0 / 65** | **65 / 65** |
+| Weights in VRAM | ~2.2 GB (CUDA runtime only) | ~19 GB spread across 5 cards |
+| Generation speed | ~0.5 tok/s (pure CPU) | ~14 tok/s (full GPU) |
+| Warm response (small prompt) | 45+ seconds | **~0.33 seconds** |
+| Cold first-load time | never completed | ~100 seconds |
+| System RAM used by Ollama | 53 GB | < 1 GB |
+| `OLLAMA_MULTIUSER_CACHE` effective | `false` (silently, v0.18 ignored) | `true` (v0.21) |
+
+**Roughly a 100x improvement in warm-request latency** from the combined fixes.
+
+### Exact config now live on artofwar
+
+`/etc/systemd/system/ollama.service.d/override.conf`:
+```ini
+[Service]
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+Environment="OLLAMA_MULTIUSER_CACHE=true"
+```
+
+Modelfile additions for `qwen2.5-coder:32b`:
+```
+PARAMETER num_ctx 32768
+PARAMETER num_gpu 65
+```
+
+Systemd units stopped + masked: `openclaw.service`, `openclaw-watchdog.service`, `openclaw-watchdog.timer`, `openclaw-gateway.service`.
+
+Ollama binary: 0.21.0 at `/usr/local/bin/ollama`. Backup of 0.18.0 at `/usr/local/bin/ollama.0.18.0.bak` + library backup at `/usr/local/lib/ollama.0.18.0.bak` for rollback if needed.
+
+---
+
 ## Ollama env vars cheat sheet
 
 Reference card for `/etc/systemd/system/ollama.service`. The full Profile A (single-GPU) and Profile B (multi-GPU) drop-in configs are in [LOCAL-CLAUDE-SETUP.md](LOCAL-CLAUDE-SETUP.md).
@@ -433,9 +608,11 @@ Reference card for `/etc/systemd/system/ollama.service`. The full Profile A (sin
 | Variable | What it does | Profile A (single-GPU display) | Profile B (multi-GPU rig) |
 |---|---|---|---|
 | `OLLAMA_GPU_OVERHEAD` | **Reserves VRAM for compositor. Prevents black-screens.** (v0.20+) | `2147483648` (2 GiB) | *unset* |
-| `OLLAMA_NUM_PARALLEL` | KV-cache blocks reserved at launch. | `1` | `4` |
+| `OLLAMA_NUM_PARALLEL` | KV-cache blocks reserved at launch. | `1` | `1` on 5×8 GB (was `4` — allocator refused to spread) |
 | `OLLAMA_MAX_LOADED_MODELS` | Blocks a stray `ollama run` from co-loading. | `1` | *unset* |
-| `OLLAMA_KV_CACHE_TYPE` | `q8_0` quantizes KV cache (~2–4x smaller). | `q8_0` on tight cards | `f16` (default) |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` quantizes KV cache (~2–4x smaller). | `q8_0` on tight cards | `q8_0` (enabled on artofwar) |
+| **`OLLAMA_MULTIUSER_CACHE`** | **Caches prompt prefixes across requests — massive speedup for agent patterns (same system prompt + tool schemas every turn).** (v0.20+) | `true` | **`true`** |
+| `OLLAMA_CONTEXT_LENGTH` | Default max context (v0.20+). Auto-sized if `0`. | `0` (auto) | `0` (or bake via Modelfile `PARAMETER num_ctx`) |
 | `OLLAMA_KEEP_ALIVE` | How long the model stays in VRAM after last request. | `5m` | `24h` |
 | `OLLAMA_SCHED_SPREAD` | Distribute layers across all GPUs. | *unset* | `true` |
 | `OLLAMA_FLASH_ATTENTION` | Faster attention kernels, lower VRAM. | `true` | `true` |
@@ -443,6 +620,8 @@ Reference card for `/etc/systemd/system/ollama.service`. The full Profile A (sin
 | `OLLAMA_LOAD_TIMEOUT` | Tolerance for large-model load. | `5m` | `10m` |
 | `CUDA_VISIBLE_DEVICES` | Which GPUs to expose. | *unset* (single card) or `1` (reserve 0 for display) | `0,1,2,3,4` |
 | `WatchdogSec` | **NEVER SET.** Ollama doesn't implement sd_notify — systemd kills it every interval. Burned us 2 days. | NEVER | NEVER |
+
+> **Model-level overrides:** `OLLAMA_CONTEXT_LENGTH` was added in Ollama 0.20+. On older servers (0.18), bake `PARAMETER num_ctx 32768` into the Modelfile instead. Force full GPU offload with `PARAMETER num_gpu <total_layers>` when the allocator is being conservative.
 
 ---
 
