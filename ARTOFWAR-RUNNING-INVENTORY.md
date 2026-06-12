@@ -2,7 +2,22 @@
 
 Living list of everything running on the artofwar box (10.0.0.30). Update whenever services are added, removed, or the box starts misbehaving.
 
-**Last updated:** 2026-04-17 — initial seed from memory, runtime sections still need paste-in.
+**Last updated:** 2026-06-11 — major update: moved from claw-code → Hermes Agent, Ollama 0.21→0.30.7, default model → qwen3-coder:30b, added Discord interface.
+
+---
+
+## ⚡ CURRENT STATE (2026-06-11) — supersedes the older sections below
+
+The rig now runs a **3-layer stack** reachable remotely over **Discord**. Full guide: [`HERMES-DISCORD-SETUP.md`](HERMES-DISCORD-SETUP.md).
+
+- **Engine:** Ollama **0.30.7** (was 0.18/0.21). `SCHED_SPREAD=true`, `KV_CACHE=q8_0`, `KEEP_ALIVE=24h`, `CONTEXT_LENGTH=32768`, `NUM_PARALLEL=1`. Plus a `gpu-wait.conf` drop-in (fixes cold-boot CPU fallback) and `ollama-preload.service` (warms the model on boot).
+- **Model (default):** **`qwen3-coder:30b`** — MoE, ~22 GB, 100% GPU across all 5 cards, 256K ctx, agentic/tool-calling. (qwen2.5-coder:32b and qwen3:32b fail Hermes's 64K-context floor.)
+- **Harness:** **Hermes Agent v0.16.0** (`~/.hermes/`, NousResearch, MIT) — replaced claw-code as the active harness. Gives Discord + web search + memory + tools.
+- **Web search:** keyless **ddgs**, multi-engine (Google/Brave/DuckDuckGo/Yandex/Startpage/Mojeek).
+- **Interface:** Discord bot **"Tzu"** (DM it). Signal was attempted first but abandoned — `signal-cli` crashes (`getServerGuid` NPE) on Windows-desktop Note-to-Self syncs.
+- **Services:** `ollama` (system), `signal-cli` (system, legacy/unused), `hermes-gateway` (user, linger on).
+
+> Everything below this line is the **historical claw-code-era inventory** — kept for reference; the engine/model/harness facts there are outdated.
 
 ---
 
