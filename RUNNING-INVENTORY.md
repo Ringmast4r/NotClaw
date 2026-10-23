@@ -1,6 +1,6 @@
-# artofwar — Running Inventory
+# inference box — Running Inventory
 
-Living list of everything running on the artofwar box (10.0.0.30). Update whenever services are added, removed, or the box starts misbehaving.
+Living list of everything running on the inference box. Update whenever services are added, removed, or the box starts misbehaving.
 
 **Last updated:** 2026-06-11 — major update: moved from claw-code → Hermes Agent, Ollama 0.21→0.30.7, default model → qwen3-coder:30b, added Discord interface.
 
@@ -25,7 +25,7 @@ The rig now runs a **3-layer stack** reachable remotely over **Discord**. Full g
 
 - **GPUs:** 5x RTX 3070 (8 GB each, 40 GB VRAM total)
 - **Storage:** Primary boot drive + `/mnt/wordlists` (500 GB USB HDD, from hash-cracking engagement — still mounted)
-- **Network:** 10.0.0.30 on LAN
+- **Network:** LAN address omitted
 
 ---
 
@@ -59,7 +59,7 @@ The rig now runs a **3-layer stack** reachable remotely over **Discord**. Full g
 
 ## Runtime snapshot (PASTE-IN — refresh when box is sluggish)
 
-Run this on artofwar and paste the output below:
+Run this on inference box and paste the output below:
 
 ```bash
 echo "=== uptime ==="; uptime

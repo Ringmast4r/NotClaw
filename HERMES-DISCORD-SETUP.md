@@ -1,4 +1,4 @@
-# Local AI Assistant — Full Setup (`artofwar` rig)
+# Local AI Assistant — Full Setup (inference rig)
 
 > Your private AI ("**Tzu**") that you talk to over **Discord**, running entirely on your own
 > 5× RTX 3070 GPUs. No cloud, no API fees, web search included.

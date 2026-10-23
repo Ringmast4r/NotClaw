@@ -10,7 +10,7 @@
 
 [![Ollama](https://img.shields.io/badge/Ollama-v0.21-00C7B7?style=for-the-badge&logo=ollama&logoColor=white)](https://ollama.ai)
 [![claw-code](https://img.shields.io/badge/claw--code-Rust-DEA584?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ultraworkers/claw-code)
-[![Rig](https://img.shields.io/badge/artofwar-5x_RTX_3070-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](ARTOFWAR-RUNNING-INVENTORY.md)
+[![Rig](https://img.shields.io/badge/inference box-5x_RTX_3070-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](RUNNING-INVENTORY.md)
 [![Workspace](https://img.shields.io/badge/Workspace-PRIVATE_%7C_NTFS_LOCKED-red?style=for-the-badge)](#workspace-status)
 [![Educational](https://img.shields.io/badge/Doubles_as-A_LOCAL_LLM_TEXTBOOK-6366f1?style=for-the-badge)](#how-an-llm-actually-answers-you)
 
@@ -42,7 +42,7 @@
 12. [Speed & quality leaderboard](#speed--quality-leaderboard)
 13. [Hardware we've tested on](#hardware-weve-tested-on)
 14. [The 2026-04-17 black-screen — visualized](#the-2026-04-17-black-screen--visualized)
-15. [**Growing pains log (2026-04-17)** — the artofwar CPU-offload cascade, version skew, openclaw, and how we clawed back 100x latency](#growing-pains-log-2026-04-17)
+15. [**Growing pains log (2026-04-17)** — the inference box CPU-offload cascade, version skew, openclaw, and how we clawed back 100x latency](#growing-pains-log-2026-04-17)
 16. [Ollama env vars cheat sheet](#ollama-env-vars-cheat-sheet)
 16. [Model tier summary](#model-tier-summary)
 17. [Primer: What is quantization?](#primer-what-is-quantization)
@@ -100,13 +100,13 @@ timeline
                : instructkr/claude-code (Python) appears
     2026-04-09 : We patch gridbasedotnet/CLAUDE's bashrc poisoning bug
                : Ollama v0.20 ships with OLLAMA_GPU_OVERHEAD
-    2026-04-12 : Claude-Cracked workspace seeded on artofwar
+    2026-04-12 : Claude-Cracked workspace seeded on inference box
                : Multi-GPU profile verified on 5x RTX 3070
     2026-04-17 : Friend's 3070 Ti black-screens following old guide
                : We add Profile A (single-GPU-safe)
                : Upstream gridbasedotnet/CLAUDE returns 404
                : Workspace renamed NotClaw, pushed private to GitHub
-               : artofwar CPU-offload cascade discovered — ccode "hi" hanging 45s+
+               : inference box CPU-offload cascade discovered — ccode "hi" hanging 45s+
                : Systemd override NUM_PARALLEL=1 + KV_CACHE_TYPE=q8_0 applied
                : Modelfile patched with PARAMETER num_ctx 32768 + num_gpu 65
                : openclaw service masked (standalone, pre-Ollama-integration)
@@ -122,7 +122,7 @@ timeline
 |---|---|
 | **[`README.md`](README.md)** | This file — landing page + educational primer + reference cards. |
 | **[`LOCAL-CLAUDE-SETUP.md`](LOCAL-CLAUDE-SETUP.md)** | Deep step-by-step walkthrough: VRAM-tier table, Profile A/B systemd configs, Step 7 smoke test, 7 gotchas, the 2026-04-17 crash case study, emergency recovery. **Start here if setting up a rig.** |
-| **[`ARTOFWAR-RUNNING-INVENTORY.md`](ARTOFWAR-RUNNING-INVENTORY.md)** | Living inventory of `artofwar` (10.0.0.30) — running services, paste-in triage block for when inference gets slow. |
+| **[`RUNNING-INVENTORY.md`](RUNNING-INVENTORY.md)** | Living inventory of `inference box` — running services, paste-in triage block for when inference gets slow. |
 | `.gitignore` | Standard Windows / editor / secret-adjacent patterns excluded. |
 
 ---
@@ -357,11 +357,11 @@ quadrantChart
 
 ## Speed & quality leaderboard
 
-Real measurements from our `artofwar` 5×RTX 3070 rig (40 GB VRAM total):
+Real measurements from our `inference box` 5×RTX 3070 rig (40 GB VRAM total):
 
 ```mermaid
 xychart-beta
-    title "Generation speed on artofwar (tok/s)"
+    title "Generation speed on inference box (tok/s)"
     x-axis ["qwen3:32b", "qwen2.5-coder:32b", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "gemma3:27b"]
     y-axis "tokens / second" 0 --> 40
     bar [3, 15, 26, 35, 20]
@@ -376,7 +376,7 @@ xychart-beta
 
 ## Hardware we've tested on
 
-### `artofwar` — our main rig (headless, dedicated)
+### `inference box` — our main rig (headless, dedicated)
 
 ```
 GPU Layout (during 32b inference, OLLAMA_SCHED_SPREAD=true):
@@ -436,7 +436,7 @@ Full post-mortem in [LOCAL-CLAUDE-SETUP.md](LOCAL-CLAUDE-SETUP.md#case-study-the
 
 ## Growing pains log (2026-04-17)
 
-A full day of compounding weirdness on the artofwar rig. Each of these is a scar that's now a lesson, and together they produced the current working config. Timeline is chronological. If you hit similar symptoms on a multi-GPU box, work through this in order.
+A full day of compounding weirdness on the inference box rig. Each of these is a scar that's now a lesson, and together they produced the current working config. Timeline is chronological. If you hit similar symptoms on a multi-GPU box, work through this in order.
 
 ### Incident 1 — `ccode "hi"` hangs 45+ seconds
 
@@ -478,7 +478,7 @@ Mental model shift: **"plan and reject"** instead of **"try and fallback"**. The
 
 **Symptom:** set `Environment="OLLAMA_CONTEXT_LENGTH=32768"` in systemd override, restarted, confirmed env was live in the service. But every cold load still tried to allocate for 131k context.
 
-**Root cause:** artofwar was running **Ollama 0.18.0**. `OLLAMA_CONTEXT_LENGTH` was added in **Ollama 0.20+**. On 0.18 the env var exists as a string in the process environment but nothing reads it. No error, no warning — it's just a no-op.
+**Root cause:** inference box was running **Ollama 0.18.0**. `OLLAMA_CONTEXT_LENGTH` was added in **Ollama 0.20+**. On 0.18 the env var exists as a string in the process environment but nothing reads it. No error, no warning — it's just a no-op.
 
 ### Lesson 2 — env-var-ignored-silently is a dangerous failure mode
 
@@ -521,7 +521,7 @@ While diagnosing, `pgrep -af openclaw` showed `openclaw` + `openclaw-gateway` pr
 
 **Plot twist from the upstream research:**
 
-Ollama v0.20.3+ release notes mention `OpenClaw` — it's an **integrated messaging-channel gateway** (WhatsApp, Telegram, Discord → Ollama) invoked via `ollama launch openclaw`. The artofwar box had a **standalone, older OpenClaw install** (systemd units at `/etc/systemd/system/openclaw.service` and `openclaw-watchdog.timer`) that predated the integration. Same name, completely different codebase.
+Ollama v0.20.3+ release notes mention `OpenClaw` — it's an **integrated messaging-channel gateway** (WhatsApp, Telegram, Discord → Ollama) invoked via `ollama launch openclaw`. The inference box box had a **standalone, older OpenClaw install** (systemd units at `/etc/systemd/system/openclaw.service` and `openclaw-watchdog.timer`) that predated the integration. Same name, completely different codebase.
 
 ### Lesson 3 — watch for name collisions in fast-moving ecosystems
 
@@ -579,7 +579,7 @@ Newer agent harnesses (aider, Claude Code itself) run inference on a background 
 
 **Roughly a 100x improvement in warm-request latency** from the combined fixes.
 
-### Exact config now live on artofwar
+### Exact config now live on inference box
 
 `/etc/systemd/system/ollama.service.d/override.conf`:
 ```ini
@@ -610,7 +610,7 @@ Reference card for `/etc/systemd/system/ollama.service`. The full Profile A (sin
 | `OLLAMA_GPU_OVERHEAD` | **Reserves VRAM for compositor. Prevents black-screens.** (v0.20+) | `2147483648` (2 GiB) | *unset* |
 | `OLLAMA_NUM_PARALLEL` | KV-cache blocks reserved at launch. | `1` | `1` on 5×8 GB (was `4` — allocator refused to spread) |
 | `OLLAMA_MAX_LOADED_MODELS` | Blocks a stray `ollama run` from co-loading. | `1` | *unset* |
-| `OLLAMA_KV_CACHE_TYPE` | `q8_0` quantizes KV cache (~2–4x smaller). | `q8_0` on tight cards | `q8_0` (enabled on artofwar) |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` quantizes KV cache (~2–4x smaller). | `q8_0` on tight cards | `q8_0` (enabled on inference box) |
 | **`OLLAMA_MULTIUSER_CACHE`** | **Caches prompt prefixes across requests — massive speedup for agent patterns (same system prompt + tool schemas every turn).** (v0.20+) | `true` | **`true`** |
 | `OLLAMA_CONTEXT_LENGTH` | Default max context (v0.20+). Auto-sized if `0`. | `0` (auto) | `0` (or bake via Modelfile `PARAMETER num_ctx`) |
 | `OLLAMA_KEEP_ALIVE` | How long the model stays in VRAM after last request. | `5m` | `24h` |
@@ -686,7 +686,7 @@ sequenceDiagram
     M-->>U: token 2 (visible)
 ```
 
-On artofwar:
+On inference box:
 - `qwen3:32b` with thinking: **~3 tok/s** (measured; the thinking tokens count against your wall-clock time).
 - `qwen2.5-coder:32b` no thinking: **~15 tok/s**.
 
@@ -834,7 +834,7 @@ stateDiagram-v2
 ```mermaid
 xychart-beta
     title "Cost per 1M tokens (USD)"
-    x-axis ["Local (electricity only, artofwar)", "Real Claude Haiku", "Real Claude Sonnet", "Real Claude Opus"]
+    x-axis ["Local (electricity only, inference box)", "Real Claude Haiku", "Real Claude Sonnet", "Real Claude Opus"]
     y-axis "Dollars per 1M tokens" 0 --> 20
     bar [0.5, 1, 3, 15]
 ```
@@ -843,7 +843,7 @@ At ~$0.15/hr full GPU load on our rig, 1M tokens costs us roughly $0.50 in elect
 
 | Tier | ~$ per 1M tokens |
 |---|---:|
-| Local (artofwar, electricity) | ~0.50 |
+| Local (inference box, electricity) | ~0.50 |
 | Claude Haiku | ~1 |
 | Claude Sonnet | ~3 |
 | Claude Opus | ~15 |
@@ -858,7 +858,7 @@ At ~$0.15/hr full GPU load on our rig, 1M tokens costs us roughly $0.50 in elect
 mindmap
   root((NotClaw))
     Hardware
-      artofwar 5x RTX 3070
+      inference box 5x RTX 3070
       Buddy's 3070 Ti
       Tier table
         4-6 GB
@@ -915,18 +915,18 @@ mindmap
 - **[`ultraworkers/claw-code`](https://github.com/ultraworkers/claw-code)** — the Rust harness we run. 185k stars, Linux-x64 + macOS-arm64 release binaries only, build from source recommended.
 - **[`instructkr/claude-code`](https://github.com/instructkr/claude-code)** — Python sibling in the same fork network. Identical commit stream to claw-code.
 - **[`Ringmast4r/gridbasedotnet-CLAUDE`](https://github.com/Ringmast4r/gridbasedotnet-CLAUDE)** — our fork of a LiteLLM-proxy approach to running the real Claude Code npm CLI against Ollama. **Separate concern**, lives at `Desktop/GITHUBS/gridbasedotnet-CLAUDE/`. Upstream `gridbasedotnet/CLAUDE` returns 404 as of 2026-04-17 — our fork is now the canonical git home for that path.
-- **[Ollama](https://ollama.ai)** — the model server. On v0.21 on artofwar as of 2026-04-17.
+- **[Ollama](https://ollama.ai)** — the model server. On v0.21 on inference box as of 2026-04-17.
 - **[qwen2.5-coder model card](https://ollama.com/library/qwen2.5-coder)** — the model family we use.
 
 ---
 
 ## Workspace status
 
-- **Repo:** [`Ringmast4r/NotClaw`](https://github.com/Ringmast4r/NotClaw) — private on GitHub.
-- **Local path:** `C:\Users\Squir\Desktop\GITHUBS\NotClaw\`
-- **NTFS permissions:** Inheritance broken 2026-04-17. Only `DESKTOP-QKOB615\Squir` + `NT AUTHORITY\SYSTEM` have access. `BUILTIN\Administrators` removed.
+- **Repo:** [`Ringmast4r/NotClaw`](https://github.com/Ringmast4r/NotClaw) — public on GitHub.
+- **Local path:** `<local clone>\NotClaw\`
+- **NTFS permissions:** Inheritance broken 2026-04-17. Access limited to the owner account and SYSTEM. Administrators group removed.
 - **Git:** `main` branch, tracks `origin/main`. No CI, no branch protection.
-- **Ollama minimum:** v0.20 for `OLLAMA_GPU_OVERHEAD`. Running v0.21 on artofwar as of 2026-04-17.
+- **Ollama minimum:** v0.20 for `OLLAMA_GPU_OVERHEAD`. Running v0.21 on inference box as of 2026-04-17.
 - **Latest incident folded in:** 2026-04-17 — single 3070 Ti black-screen case study.
 
 ---
@@ -970,7 +970,7 @@ A: No. It's closer to Haiku in reasoning quality. For routine code-reading, edit
 A: GitHub-private means not publicly searchable or cloneable. GitHub itself can technically access the repo storage (that's how any SaaS works). For zero-knowledge privacy, don't push to any remote — keep it local-only. Ours is on a private GitHub for backup/convenience; local files stay NTFS-locked regardless.
 
 **Q: What happens if `ultraworkers/claw-code` goes the way of `gridbasedotnet/CLAUDE` and 404s?**
-A: We already cloned it locally on artofwar. The binary is at `/usr/local/bin/claw`. If the upstream disappears, we still have the source + binary. Worth mirroring the repo to your own GitHub as a safety net.
+A: We already cloned it locally on inference box. The binary is at `/usr/local/bin/claw`. If the upstream disappears, we still have the source + binary. Worth mirroring the repo to your own GitHub as a safety net.
 
 **Q: Is `OLLAMA_GPU_OVERHEAD` really a big deal?**
 A: Yes. It's the most important single-setting safety win for display-driving GPUs. Without it, Ollama will happily oversubscribe VRAM and the compositor dies. Set it to ~2 GiB on any GPU also driving a monitor.
